@@ -17,6 +17,8 @@ gMessageHistory = {}  # group_id -> deque of messages
 gConfigDir = './plugin/data/OlivOSAIChatAssassin'
 gConfigPath = './plugin/data/OlivOSAIChatAssassin/config.json'
 
+gSkipStr = '【SKIP】'
+
 gGroupLock: 'dict[str, threading.Lock]' = {}
 
 gMemoryDir = './plugin/data/OlivOSAIChatAssassin'
@@ -227,7 +229,7 @@ def should_reply(group_id, message, plugin_event):
         if kw in message:
             return True
     # 随机概率回复
-    prob = gConfig.get('reply_probability', 0.3)
+    prob = gConfig.get('reply_probability', configDefault["reply_probability"])
     if random.random() < prob:
         return True
     return False
@@ -250,7 +252,6 @@ def reply_to_group(plugin_event, group_id):
     contentDefault = f'''
 # 规则
 - 你是一个人类，这是你日常水群的群聊，你会根据你的人格设定自行决定要不要参与群聊对话
-- 聊天记录的格式为："【发言时间】 [【昵称】](【QQ号】)说: 【消息】"
 - "[OP:at,id=【QQ号】]"表示你被@，这是群聊中@的格式，你也可以使用这种格式
 - 谨记你是在进行聊天，所以不要把括号之类的内容发出来，不需要你描述自己的动作或者心理活动，这只会让人起疑
 
@@ -283,7 +284,7 @@ def reply_to_group(plugin_event, group_id):
         messages = get_ai_context(gConfig, history, content, flagMerge=True)
         # 调用 API
         try:
-            gMemory[group_id] = call_ai(gConfig, messages, temperature_override=0.7)
+            gMemory[group_id] = call_ai(gConfig, messages, temperature_override=0.7, json_mode=False)
             write_memory()
             log(f'[本群记忆]\n{gMemory[group_id]}')
         except Exception as e:
@@ -346,7 +347,7 @@ def reply_to_group(plugin_event, group_id):
 - {json.dumps(thisMemory, ensure_ascii=False)}
 
 # 当前任务
-- 当你不想参与对话时，你会回复"【SKIP】"，这是你必须遵守的规则，你不需要每句话都回复，你需要按照你的心情来，但是当有人找你时尽量回复
+- 当你不想参与对话时，你会回复"{gSkipStr}"，这是你必须遵守的规则，你不需要每句话都回复，你需要按照你的心情来，但是当有人找你时尽量回复
 - 判断是否应该加入聊天进行回复
 - 如果应该回复，就直接输出你的回复内容
 '''
@@ -364,7 +365,7 @@ def reply_to_group(plugin_event, group_id):
         max_len = gConfig.get('max_message_length', 2000)
         if len(reply_text) > max_len:
             reply_text = reply_text[:max_len] + '...'
-        if reply_text != '【SKIP】':
+        if reply_text != gSkipStr:
             reply_list = reply_split(reply_wash(reply_text))
             log(f'REPLY - {reply_list}')
             for i in reply_list:
@@ -425,13 +426,18 @@ def get_ai_context(
                 messages.append(
                     {
                         "role": "user",
-                        "content": f'{entry["time"]} [{entry["nickname"]}]({entry["user_id"]}) 说: "{entry["message"]}"'
+                        "content": json.dumps(entry, ensure_ascii=False)
                     }
                 )
     return messages
 
 
-def call_ai(lConfig, messages, temperature_override: 'float|None' = None):
+def call_ai(
+    lConfig,
+    messages,
+    temperature_override: 'float|None' = None,
+    json_mode: bool = True
+):
     # 调用 API
     res = None
     api_key = lConfig['api_key']
@@ -458,9 +464,54 @@ def call_ai(lConfig, messages, temperature_override: 'float|None' = None):
     if response.status_code == 200:
         result: dict = response.json()
         res = result['choices'][0]['message']['content'].strip()
+        res = get_message(res, json_mode=json_mode)
         log_usage(get_usage(result.get('usage', {})))
     else:
         log(f'API ERR: {response.status_code} {response.text}')
+    return res
+
+
+def get_message(data_str: str, json_mode: bool):
+    res = data_str
+    if not json_mode:
+        log('DATA TYPE - STR OUT')
+    elif res == gSkipStr:
+        log('DATA TYPE - STR SKIP')
+    else:
+        res = get_json_message(res)
+    return res
+
+
+def get_json_message(data_str: str):
+    res = None
+    data_str = data_str.replace('\r', '')
+    data_list = data_str.split('\n')
+    res_list = []
+    for i in data_list:
+        i_2 = i
+        i_2 = i_2.strip()
+        if (
+            i_2.startswith('{')
+            and i_2.endswith('}')
+        ):
+            try:
+                data_dict = json.loads(i_2)
+                if (
+                    type(data_dict) is dict
+                    and 'message' in data_dict
+                    and type(data_dict['message']) is str
+                ):
+                    res_list.append(data_dict['message'])
+                    log('DATA TYPE - JSON')
+                else:
+                    log(f'DATA ERR: {i}')
+            except Exception:
+                log(f'DATA ERR: {i}')
+        else:
+            res_list.append(i)
+            log('DATA TYPE - STR')
+    if len(res_list) > 0:
+        res = '\n'.join(res_list)
     return res
 
 
@@ -511,8 +562,8 @@ def get_status():
     if gConfig:
         status_lines.append(f'已加载配置: {len(gConfig.get("enabled_groups", []))} 个启用群组')
         status_lines.append(f'API密钥: {"已设置" if gConfig.get("api_key") else "未设置"}')
-        status_lines.append(f'历史记录大小: {gConfig.get("history_size", 20)}')
-        status_lines.append(f'回复概率: {gConfig.get("reply_probability", 0.3)}')
+        status_lines.append(f'历史记录大小: {gConfig.get("history_size", configDefault["history_size"])}')
+        status_lines.append(f'回复概率: {gConfig.get("reply_probability", configDefault["reply_probability"])}')
         for group_id, history in gMessageHistory.items():
             status_lines.append(f'群 {group_id}: {len(history)} 条历史消息')
     else:
