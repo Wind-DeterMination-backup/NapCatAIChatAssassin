@@ -23,7 +23,13 @@ gGroupLock: 'dict[str, threading.Lock]' = {}
 
 gMemoryDir = './plugin/data/OlivOSAIChatAssassin'
 gMemoryPath = './plugin/data/OlivOSAIChatAssassin/memory.json'
-gMemory = {}
+gMemory = {
+    '全局': {
+        '常识': [],
+        '知识搜索': {},
+        '人物关系': {}
+    }
+}
 gMemoryLock = threading.Lock()
 gMemoryDefaultStr = "择机加入对话"
 
