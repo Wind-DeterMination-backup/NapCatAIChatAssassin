@@ -55,7 +55,6 @@ configDefault = {
 class Event(object):
     def init(plugin_event, Proc):
         # 初始化流程
-        global gConfig
         load_config()
         load_memory()
         # 初始化消息历史
@@ -79,7 +78,6 @@ class Event(object):
 
     def group_message(plugin_event, Proc):
         # 群消息事件入口
-        global gConfig, gMessageHistory
         group_id = str(plugin_event.data.group_id)
         gGroupLock.setdefault(group_id, threading.Lock())
         missed = gGroupLock[group_id].locked()
@@ -193,7 +191,6 @@ def unity_group_message(plugin_event, Proc, missed: bool = False):
 
 
 def should_ignore(message):
-    global gConfig
     if not gConfig:
         return False
     if len(message) <= 0:
@@ -206,7 +203,6 @@ def should_ignore(message):
 
 
 def add_message_to_history(group_id, message, user_id, nickname):
-    global gMessageHistory
     if group_id not in gMessageHistory:
         return
     timestamp = time.time()
@@ -221,7 +217,6 @@ def add_message_to_history(group_id, message, user_id, nickname):
 
 
 def should_reply(group_id, message, plugin_event):
-    global gConfig
     if not gConfig:
         return False
     # 检查是否被@
@@ -242,7 +237,6 @@ def should_reply(group_id, message, plugin_event):
 
 
 def reply_to_group(plugin_event, group_id):
-    global gConfig, gMessageHistory, gMemory
     if not gConfig or not gConfig.get('api_key'):
         return
     # 构建对话历史
@@ -272,7 +266,6 @@ def reply_to_group(plugin_event, group_id):
 
     # 生成记忆
     def set_memory():
-        global gMemory, gMessageHistory
         history = list(gMessageHistory.get(group_id, deque()))
         # 设置任务
         content = f'''
@@ -562,7 +555,6 @@ def log_usage(usage_data: dict):
 
 
 def get_status():
-    global gConfig, gMessageHistory
     status_lines = []
     status_lines.append('状态')
     if gConfig:
