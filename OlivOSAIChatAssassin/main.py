@@ -372,7 +372,7 @@ def reply_to_group(plugin_event, group_id):
                     add_message_to_history(group_id, i, None, None)
             t_set_memory = threading.Thread(target=set_memory)
             t_set_memory.start()
-            sleep(3.05 + (random.random() * 2 - 1) * 2.95)
+            sleep(1 + (random.random() * 2 - 1) * 0.95)
             reply(plugin_event, reply_list)
             t_set_memory.join()
         else:
@@ -596,8 +596,13 @@ def log(msg: str):
 
 def reply(plugin_event, msg: list):
     for i in msg:
-        if len(i) > 0:
-            sleep(0.75 + (random.random() * 2 - 1) * 0.5)
+        len_i = len(i)
+        if len_i > 0:
+            sleep_time = sum([
+                0.75 + (random.random() * 2 - 1) * 0.5
+                for _ in range(len_i)
+            ])
+            sleep(sleep_time)
             plugin_event.reply(i)
 
 
