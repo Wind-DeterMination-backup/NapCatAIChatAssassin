@@ -130,10 +130,16 @@ class OpenAICompatClient:
         self.update_config(config)
 
     def update_config(self, config):
+        failover_models = [
+            str(item).strip()
+            for item in (config.get('failover_models', []) if isinstance(config.get('failover_models', []), list) else [])
+            if str(item).strip()
+        ]
         self.config = {
             'api_key': str(config.get('api_key', '')).strip(),
             'api_base': str(config.get('api_base', 'http://127.0.0.1:15721/v1')).rstrip('/') + '/',
             'model': str(config.get('model', '')).strip(),
+            'failover_models': failover_models,
             'temperature': float(config.get('temperature', 0.7)),
             'max_tokens': int(config.get('max_tokens', 512)),
             'retry_attempts': max(1, int(config.get('retry_attempts', 3))),
@@ -189,13 +195,21 @@ class OpenAICompatClient:
         return isinstance(error, OpenAICompatError) and error.http_status in RESPONSE_FALLBACK_HTTP_STATUS
 
     def _build_model_candidates(self, model):
-        normalized = str(model or '').strip()
-        if not normalized:
-            return []
-        candidates = [normalized]
-        for alias in MODEL_ALIAS_CANDIDATES.get(normalized, []):
-            if alias not in candidates:
-                candidates.append(alias)
+        primary = str(model or '').strip()
+        seed_models = []
+        if primary:
+            seed_models.append(primary)
+        for fallback in self.config.get('failover_models', []):
+            if fallback not in seed_models:
+                seed_models.append(fallback)
+
+        candidates = []
+        for seed in seed_models:
+            if seed not in candidates:
+                candidates.append(seed)
+            for alias in MODEL_ALIAS_CANDIDATES.get(seed, []):
+                if alias not in candidates:
+                    candidates.append(alias)
         return candidates
 
     def _extract_chat_text(self, payload):
@@ -278,7 +292,8 @@ class OpenAICompatClient:
 
     def _complete_via_chat(self, messages, model, temperature, max_tokens, headers):
         last_error = None
-        for index, candidate in enumerate(self._build_model_candidates(model)):
+        candidates = self._build_model_candidates(model)
+        for index, candidate in enumerate(candidates):
             try:
                 payload = self._run_retriable(lambda: self._request_json('chat/completions', {
                     'model': candidate,
@@ -293,8 +308,8 @@ class OpenAICompatClient:
                 return text
             except Exception as error:
                 last_error = error
-                if index < len(self._build_model_candidates(model)) - 1 and self._should_fallback_transport(error):
-                    self.warn(f'聊天接口 chat 当前模型 {candidate} 不稳定，切换到 {self._build_model_candidates(model)[index + 1]}：{error}')
+                if index < len(candidates) - 1 and self._should_fallback_transport(error):
+                    self.warn(f'聊天接口 chat 当前模型 {candidate} 不稳定，切换到 {candidates[index + 1]}：{error}')
                     continue
                 raise
         raise last_error
@@ -310,9 +325,10 @@ class OpenAICompatClient:
         if not variants:
             raise OpenAICompatError('聊天接口未提供可发送内容', code='CHAT_BACKEND_INVALID_REQUEST')
 
+        candidates = self._build_model_candidates(model)
         last_error = None
         for variant_name, variant_body in variants:
-            for index, candidate in enumerate(self._build_model_candidates(model)):
+            for index, candidate in enumerate(candidates):
                 try:
                     payload = self._run_retriable(lambda: self._request_json('responses', {
                         'model': candidate,
@@ -326,8 +342,8 @@ class OpenAICompatClient:
                     return text
                 except Exception as error:
                     last_error = error
-                    if index < len(self._build_model_candidates(model)) - 1 and self._should_fallback_transport(error):
-                        self.warn(f'聊天接口 responses 当前载荷 {variant_name} 下模型 {candidate} 不稳定，切换模型：{error}')
+                    if index < len(candidates) - 1 and self._should_fallback_transport(error):
+                        self.warn(f'聊天接口 responses 当前载荷 {variant_name} 下模型 {candidate} 不稳定，切换到 {candidates[index + 1]}：{error}')
                         continue
                     break
         raise last_error

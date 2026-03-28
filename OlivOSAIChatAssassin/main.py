@@ -73,6 +73,13 @@ DEFAULT_CONFIG = {
         'api_key': '',
         'api_base': 'http://127.0.0.1:15721/v1',
         'model': 'gpt-5.4-mini',
+        'failover_models': [
+            'gpt-5.4',
+            'gpt-5.2',
+            'deepseek-ai/deepseek-v3.2',
+            'deepseek-ai/deepseek-v3.1-terminus',
+            'gpt-5-codex-mini'
+        ],
         'reply_model': '',
         'filter_model': '',
         'memory_model': '',

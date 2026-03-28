@@ -43,6 +43,8 @@ python -m OlivOSAIChatAssassin
 - `napcat.event_base_url`: NapCat SSE 地址
 - `napcat.event_path`: 一般填 `/_events`
 - `ai.api_base`: OpenAI 兼容接口根地址，建议带 `/v1`
+- `ai.model`: 主模型，默认是 `gpt-5.4-mini`
+- `ai.failover_models`: 故障转移模型列表，默认是 `["gpt-5.4","gpt-5.2","deepseek-ai/deepseek-v3.2","deepseek-ai/deepseek-v3.1-terminus","gpt-5-codex-mini"]`
 - `ai.reply_model`: 主回复模型，可留空继承 `model`
 - `ai.memory_model`: 群长期记忆总结模型，可留空继承 `model`
 - `bot.enabled_groups`: 生效群号列表，填 `["all"]` 表示所有群
