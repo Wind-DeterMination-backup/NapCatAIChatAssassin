@@ -1,6 +1,8 @@
-# OlivOSAIChatAssassin
+# NapCatAIChatAssassin
 
-这个仓库已改成 `NapCat` 版，不再依赖 `OlivOS`。
+这是基于原仓库 `lunzhiPenxil/OlivOSAIChatAssassin` 的 `NapCat` fork，继续遵守原项目的 `AGPL-3.0` 许可证。
+
+当前版本已改成 `NapCat` 版，不再依赖 `OlivOS`。
 
 当前实现思路：
 
@@ -8,6 +10,12 @@
 - 人设改成 `Cain（该隐）` 的管理局世界观设定
 - 主动插话判定仍保留原仓库逻辑：`@`、关键词、随机概率先决定是否进入回复流程，最终是否开口仍由人格 prompt 决定
 - 模型调用层补上 CainBot 第 6 点里的关键能力：`chat/completions` / `responses` 双通道兼容、自动回退、重试、冷却
+
+## Fork 说明
+
+- 上游仓库：`https://github.com/lunzhiPenxil/OlivOSAIChatAssassin`
+- 当前仓库定位：把原本的 `OlivOS` 插件形态迁移为 `NapCat HTTP + SSE` 常驻服务
+- 许可证：沿用上游 `AGPL-3.0`
 
 ## 运行
 

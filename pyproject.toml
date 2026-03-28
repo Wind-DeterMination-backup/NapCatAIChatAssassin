@@ -23,8 +23,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/lunzhiPenxil/OlivOSAIChatAssassin"
-Issues = "https://github.com/lunzhiPenxil/OlivOSAIChatAssassin/issues"
+Repository = "https://github.com/Wind-DeterMination-backup/NapCatAIChatAssassin"
+Issues = "https://github.com/Wind-DeterMination-backup/NapCatAIChatAssassin/issues"
 
 [project.scripts]
 napcat-aichat-assassin = "OlivOSAIChatAssassin.main:main"
