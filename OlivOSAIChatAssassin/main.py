@@ -36,6 +36,9 @@ gMemory = {
 gMemoryLock = threading.Lock()
 gMemoryDefaultStr = "择机加入对话"
 
+gStaticKnowledgeDir = './plugin/data/OlivOSAIChatAssassin/Knowledge'
+gStaticKnowledge = {}
+
 configDefault = {
     'api_key': '',
     'api_base': 'https://api.deepseek.com/v1',
@@ -59,10 +62,17 @@ configDefault = {
 class Event(object):
     def init(plugin_event, Proc):
         # 初始化流程
+        pass
+
+    def init_after(plugin_event, Proc):
+        # 初始化后处理流程
+        global gProc
+        global gMessageHistory
+        gProc = Proc
         load_config()
+        load_staticKnowledge()
         load_memory()
         # 初始化消息历史
-        global gMessageHistory
         gMessageHistory = {}
         # 如果配置中启用了群组，初始化对应的历史队列
         if gConfig and 'enabled_groups' in gConfig:
@@ -70,11 +80,6 @@ class Event(object):
                 gMessageHistory[group_id] = deque(
                     maxlen=gConfig.get('history_size', configDefault['history_size'])
                 )
-
-    def init_after(plugin_event, Proc):
-        # 初始化后处理流程
-        global gProc
-        gProc = Proc
 
     def private_message(plugin_event, Proc):
         # 私聊消息事件入口
@@ -128,6 +133,28 @@ def load_config():
     except Exception as e:
         warn(f'加载配置失败: {e}')
         gConfig = None
+
+
+def load_staticKnowledge():
+    global gStaticKnowledge
+    gStaticKnowledge = {}
+    try:
+        os.makedirs(gStaticKnowledgeDir, exist_ok=True)
+        for i in os.listdir(gStaticKnowledgeDir):
+            f_name = f'{gStaticKnowledgeDir}/{i}'
+            try:
+                with open(f_name, 'r', encoding='utf-8') as f:
+                    f_obj = json.loads(f.read())
+                    if type(f_obj) is not dict:
+                        warn(f'加载知识库[{i}]失败: 类型错误[{type(f_obj)}]')
+                    else:
+                        gStaticKnowledge.update(**f_obj)
+                        log(f'已加载知识库[{i}]')
+            except Exception as e:
+                warn(f'加载知识库[{i}]失败: {e}')
+        log(f'已加载知识库共[{len(gStaticKnowledge)}]条')
+    except Exception as e:
+        warn(f'加载知识库完全失败: {e}')
 
 
 def load_memory():
@@ -374,18 +401,25 @@ def reply_to_group(plugin_event, group_id):
         ):
             thisMemoryG[k] = v
     key_gMemory_const = '知识搜索'
+    key_staticKnowledge = '知识库'
     thisMemoryG[key_gMemory_const] = {}
     for key_gMemory in (
         '知识缓存',
+        '知识库',
         '知识搜索',
     ):
         thisMemoryM = gMemory.get('全局', {key_gMemory: {}}).get(key_gMemory, {})
+        if key_gMemory == key_staticKnowledge:
+            thisMemoryM = gStaticKnowledge
         if type(thisMemoryM) is dict:
             for k, v in thisMemoryM.items():
                 flagHit = False
                 rank = None
                 for j in history:
-                    rank = get_recommendRank(k, j.get('message', ''))
+                    if key_gMemory == key_staticKnowledge:
+                        rank = get_recommendRank(k, j.get('message', ''), rate=0.15)
+                    else:
+                        rank = get_recommendRank(k, j.get('message', ''))
                     if get_recommendMatch(rank):
                         flagHit = True
                         break
