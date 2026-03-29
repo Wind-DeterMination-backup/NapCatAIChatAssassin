@@ -6,6 +6,7 @@ mod util;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -63,10 +64,24 @@ struct AppState {
     memory: Mutex<MemoryFile>,
     static_knowledge: Mutex<HashMap<String, String>>,
     message_history: Mutex<HashMap<String, VecDeque<HistoryEntry>>>,
-    group_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    group_locks: Mutex<HashMap<String, Arc<GroupGate>>>,
     openai: Mutex<OpenAiCompatClient>,
     napcat: NapcatClient,
     last_cainbot_payload: Mutex<Option<String>>,
+}
+
+struct GroupGate {
+    lock: Mutex<()>,
+    pending: AtomicUsize,
+}
+
+impl GroupGate {
+    fn new() -> Self {
+        Self {
+            lock: Mutex::new(()),
+            pending: AtomicUsize::new(0),
+        }
+    }
 }
 
 #[tokio::main]
@@ -112,9 +127,11 @@ async fn main() -> anyhow::Result<()> {
                 .run_event_loop(|event| {
                     let state = Arc::clone(&state);
                     async move {
-                        if let Err(error) = handle_event(state, event).await {
-                            util::warn(&format!("事件处理失败: {error}"));
-                        }
+                        tokio::spawn(async move {
+                            if let Err(error) = handle_event(state, event).await {
+                                util::warn(&format!("事件处理失败: {error}"));
+                            }
+                        });
                         Ok(())
                     }
                 })
@@ -154,12 +171,20 @@ async fn handle_event(state: Arc<AppState>, event: Value) -> anyhow::Result<()> 
     if group_id.is_empty() {
         return Ok(());
     }
-    let lock = get_group_lock(&state, &group_id).await;
-    let _guard = lock.lock().await;
-    handle_group_message(state, event).await
+    let gate = get_group_lock(&state, &group_id).await;
+    let missed_initial = gate.pending.fetch_add(1, Ordering::SeqCst) > 0;
+    let _guard = gate.lock.lock().await;
+    let missed = if gate.pending.load(Ordering::SeqCst) == 1 {
+        false
+    } else {
+        missed_initial
+    };
+    let result = handle_group_message(state, event, missed).await;
+    gate.pending.fetch_sub(1, Ordering::SeqCst);
+    result
 }
 
-async fn handle_group_message(state: Arc<AppState>, event: Value) -> anyhow::Result<()> {
+async fn handle_group_message(state: Arc<AppState>, event: Value, missed: bool) -> anyhow::Result<()> {
     let config = { state.config.lock().await.clone() };
     let group_id = get_str(&event, "group_id");
     let self_id = get_str(&event, "self_id");
@@ -202,6 +227,11 @@ async fn handle_group_message(state: Arc<AppState>, event: Value) -> anyhow::Res
         },
     )
     .await;
+
+    if missed {
+        util::info(&format!("MISSED - {}", message_text.trim()));
+        return Ok(());
+    }
 
     if !should_reply_by_rule(&config, &message_text, &self_id) {
         return Ok(());
@@ -472,11 +502,11 @@ async fn get_history_entries(state: &Arc<AppState>, group_id: &str, limit: usize
         .collect()
 }
 
-async fn get_group_lock(state: &Arc<AppState>, group_id: &str) -> Arc<Mutex<()>> {
+async fn get_group_lock(state: &Arc<AppState>, group_id: &str) -> Arc<GroupGate> {
     let mut locks = state.group_locks.lock().await;
     locks
         .entry(group_id.to_string())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .or_insert_with(|| Arc::new(GroupGate::new()))
         .clone()
 }
 
