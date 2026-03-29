@@ -321,7 +321,7 @@ class OpenAICompatClient:
         if structured:
             variants.append(('structured-input_text', {'input': structured}))
         flattened = self._build_flattened_input(messages)
-        if flattened and not self._is_cc_switch_proxy():
+        if flattened:
             variants.append(('flattened-string', {'input': flattened}))
         if not variants:
             raise OpenAICompatError('聊天接口未提供可发送内容', code='CHAT_BACKEND_INVALID_REQUEST')

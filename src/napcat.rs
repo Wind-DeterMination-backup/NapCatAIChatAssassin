@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -8,7 +9,7 @@ use serde_json::Value;
 use crate::config::NapcatConfig;
 use crate::util::info;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct NapcatClient {
     http: Client,
     config: NapcatConfig,
@@ -17,7 +18,7 @@ pub struct NapcatClient {
 impl NapcatClient {
     pub fn new(config: NapcatConfig) -> anyhow::Result<Self> {
         let http = Client::builder()
-            .timeout(Duration::from_millis(config.request_timeout_ms.max(5000)))
+            .connect_timeout(Duration::from_secs(10))
             .build()?;
         Ok(Self { http, config })
     }
@@ -38,6 +39,32 @@ impl NapcatClient {
             serde_json::json!({"group_id": group_id, "message": message}),
         )
         .await?;
+        Ok(())
+    }
+
+    pub async fn send_local_file_to_group(
+        &self,
+        group_id: &str,
+        file_path: &Path,
+        file_name: &str,
+        notify_text: &str,
+    ) -> anyhow::Result<()> {
+        let normalized_path = file_path.to_string_lossy().to_string();
+        if !normalized_path.trim().is_empty() {
+            self.call(
+                "upload_group_file",
+                serde_json::json!({
+                    "group_id": group_id,
+                    "file": normalized_path,
+                    "name": file_name,
+                    "upload_file": true
+                }),
+            )
+            .await?;
+        }
+        if !notify_text.trim().is_empty() {
+            self.send_group_message(group_id, notify_text, None).await?;
+        }
         Ok(())
     }
 
@@ -69,9 +96,10 @@ impl NapcatClient {
         for (key, value) in &self.config.headers {
             request = request.header(key, value);
         }
-        let response = request
-            .send()
+        let connect_timeout = Duration::from_millis(self.config.request_timeout_ms.max(5000));
+        let response = tokio::time::timeout(connect_timeout, request.send())
             .await
+            .context("NapCat SSE connect timeout")?
             .context("failed to connect NapCat SSE")?;
         if response.status().is_client_error() || response.status().is_server_error() {
             bail!("NapCat SSE 返回 HTTP {}", response.status());
@@ -99,7 +127,11 @@ impl NapcatClient {
         for (key, value) in &self.config.headers {
             request = request.header(key, value);
         }
-        let response = request.json(&payload).send().await?;
+        let response = request
+            .timeout(Duration::from_millis(self.config.request_timeout_ms.max(5000)))
+            .json(&payload)
+            .send()
+            .await?;
         if response.status().is_client_error() || response.status().is_server_error() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();

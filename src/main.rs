@@ -1,6 +1,7 @@
 mod config;
 mod napcat;
 mod openai;
+mod tools;
 mod util;
 
 use std::collections::{HashMap, VecDeque};
@@ -9,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use config::{Config, get_cainbot_exclusive_groups_file_path, load_or_create_config};
 use napcat::NapcatClient;
 use openai::{ChatMessage, OpenAiCompatClient};
@@ -17,6 +18,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
+use tools::{ToolExecutor, ToolRuntimeContext, build_tool_system_prompt, extract_tool_request};
 
 const SKIP_TEXT: &str = "【SKIP】";
 const MIN_CAINBOT_EXCLUSIVE_GROUPS_HEARTBEAT_SECONDS: u64 = 5;
@@ -68,6 +70,7 @@ struct AppState {
     group_locks: Mutex<HashMap<String, Arc<GroupGate>>>,
     openai: Mutex<OpenAiCompatClient>,
     napcat: NapcatClient,
+    tool_executor: ToolExecutor,
     cainbot_sync_state: Mutex<CainbotSyncState>,
 }
 
@@ -106,8 +109,8 @@ async fn main() -> anyhow::Result<()> {
     let static_knowledge = load_static_knowledge(&knowledge_dir)?;
 
     let state = Arc::new(AppState {
-        root_dir,
-        config_path,
+        root_dir: root_dir.clone(),
+        config_path: config_path.clone(),
         memory_path,
         knowledge_dir,
         config: Mutex::new(config),
@@ -116,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
         message_history: Mutex::new(HashMap::new()),
         group_locks: Mutex::new(HashMap::new()),
         openai: Mutex::new(openai),
+        tool_executor: ToolExecutor::new(root_dir.clone(), config_path.clone(), napcat.clone())?,
         napcat,
         cainbot_sync_state: Mutex::new(CainbotSyncState::default()),
     });
@@ -246,17 +250,16 @@ async fn handle_group_message(state: Arc<AppState>, event: Value, missed: bool) 
     }
 
     let reply_messages = build_reply_messages(&state, &config, &group_id, &self_id, &message_text).await?;
-    let reply_text = {
-        let mut client = state.openai.lock().await;
-        client
-            .complete(
-                &reply_messages,
-                non_empty(Some(&config.ai.reply_model)),
-                None,
-                Some(config.ai.max_tokens),
-            )
-            .await
-    };
+    let reply_text = generate_reply_with_tools(
+        &state,
+        &config,
+        ToolRuntimeContext {
+            group_id: group_id.clone(),
+        },
+        reply_messages,
+        non_empty(Some(&config.ai.reply_model)),
+    )
+    .await;
     let reply_text = match reply_text {
         Ok(text) => text,
         Err(error) => {
@@ -373,6 +376,10 @@ async fn build_reply_messages(
         "你可以参考最近上下文和本群记忆决定是否接话。".to_string(),
         format!("本群长期记忆：{}", if long_memory.is_empty() { "暂无" } else { &long_memory }),
     ];
+    let tool_prompt = build_tool_system_prompt(config);
+    if !tool_prompt.trim().is_empty() {
+        prompt_parts.push(tool_prompt);
+    }
     if !selected_knowledge.is_null() && selected_knowledge != json!({}) {
         prompt_parts.push(format!("命中的知识与关系：{}", serde_json::to_string(&selected_knowledge)?));
     }
@@ -390,6 +397,50 @@ async fn build_reply_messages(
             ),
         },
     ])
+}
+
+async fn generate_reply_with_tools(
+    state: &Arc<AppState>,
+    config: &Config,
+    runtime: ToolRuntimeContext,
+    mut messages: Vec<ChatMessage>,
+    model_override: Option<&str>,
+) -> anyhow::Result<String> {
+    let max_rounds = config.tools.max_rounds.max(1);
+    for _round in 0..max_rounds {
+        let reply_text = {
+            let mut client = state.openai.lock().await;
+            client
+                .complete(
+                    &messages,
+                    model_override,
+                    None,
+                    Some(config.ai.max_tokens),
+                )
+                .await?
+        };
+        let normalized = reply_text.trim().to_string();
+        if normalized.is_empty() || normalized == SKIP_TEXT {
+            return Ok(normalized);
+        }
+        let Some(tool_request) = extract_tool_request(&normalized) else {
+            return Ok(normalized);
+        };
+        let tool_result = state
+            .tool_executor
+            .execute(config, &runtime, tool_request)
+            .await
+            .unwrap_or_else(|error| format!("工具执行失败：{error}"));
+        messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            content: normalized,
+        });
+        messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: format!("工具执行结果：\n{tool_result}"),
+        });
+    }
+    bail!("工具调用轮数超限")
 }
 
 async fn build_selected_knowledge(state: &Arc<AppState>, memory: &MemoryFile, group_id: &str) -> Value {

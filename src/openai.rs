@@ -226,7 +226,7 @@ impl OpenAiCompatClient {
         if !structured.is_empty() {
             variants.push(json!({ "input": structured }));
         }
-        if !flattened.is_empty() && !self.is_cc_switch_proxy() {
+        if !flattened.is_empty() {
             variants.push(json!({ "input": flattened }));
         }
         if variants.is_empty() {

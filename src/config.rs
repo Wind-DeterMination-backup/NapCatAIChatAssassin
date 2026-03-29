@@ -15,6 +15,8 @@ pub struct Config {
     #[serde(default)]
     pub bot: BotConfig,
     #[serde(default)]
+    pub tools: ToolsConfig,
+    #[serde(default)]
     pub integration: IntegrationConfig,
 }
 
@@ -24,6 +26,7 @@ impl Default for Config {
             napcat: NapcatConfig::default(),
             ai: AiConfig::default(),
             bot: BotConfig::default(),
+            tools: ToolsConfig::default(),
             integration: IntegrationConfig::default(),
         }
     }
@@ -153,6 +156,44 @@ impl Default for BotConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_tool_max_rounds")]
+    pub max_rounds: u32,
+    #[serde(default = "default_tool_timeout_ms")]
+    pub execution_timeout_ms: u64,
+    #[serde(default = "default_tool_fetch_max_chars")]
+    pub fetch_max_chars: usize,
+    #[serde(default = "default_tool_temp_dir")]
+    pub temp_dir: String,
+    #[serde(default = "default_tool_audit_log")]
+    pub audit_log_path: String,
+    #[serde(default = "default_tool_editable_roots")]
+    pub editable_roots: Vec<String>,
+    #[serde(default = "default_tool_send_file_roots")]
+    pub send_file_roots: Vec<String>,
+    #[serde(default = "default_tool_shell_programs")]
+    pub shell_allowed_programs: Vec<String>,
+}
+
+impl Default for ToolsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_rounds: default_tool_max_rounds(),
+            execution_timeout_ms: default_tool_timeout_ms(),
+            fetch_max_chars: default_tool_fetch_max_chars(),
+            temp_dir: default_tool_temp_dir(),
+            audit_log_path: default_tool_audit_log(),
+            editable_roots: default_tool_editable_roots(),
+            send_file_roots: default_tool_send_file_roots(),
+            shell_allowed_programs: default_tool_shell_programs(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationConfig {
     #[serde(default = "default_true")]
     pub write_cainbot_exclusive_groups: bool,
@@ -264,6 +305,55 @@ fn default_enabled_groups() -> Vec<String> {
 
 fn default_cainbot_exclusive_groups_heartbeat_seconds() -> u64 {
     30
+}
+
+fn default_tool_max_rounds() -> u32 {
+    3
+}
+
+fn default_tool_timeout_ms() -> u64 {
+    20_000
+}
+
+fn default_tool_fetch_max_chars() -> usize {
+    12_000
+}
+
+fn default_tool_temp_dir() -> String {
+    "./data/tool-temp".to_string()
+}
+
+fn default_tool_audit_log() -> String {
+    "./data/tool-audit.log".to_string()
+}
+
+fn default_tool_editable_roots() -> Vec<String> {
+    vec![
+        "/Wind_Data/codex".to_string(),
+        "./data/tool-workspace".to_string(),
+    ]
+}
+
+fn default_tool_send_file_roots() -> Vec<String> {
+    vec![
+        "/Wind_Data/codex".to_string(),
+        "./data/tool-temp".to_string(),
+        "./data/tool-workspace".to_string(),
+    ]
+}
+
+fn default_tool_shell_programs() -> Vec<String> {
+    vec![
+        "python3".to_string(),
+        "ls".to_string(),
+        "cat".to_string(),
+        "sed".to_string(),
+        "grep".to_string(),
+        "find".to_string(),
+        "head".to_string(),
+        "tail".to_string(),
+        "wc".to_string(),
+    ]
 }
 
 fn default_history_size() -> usize {
