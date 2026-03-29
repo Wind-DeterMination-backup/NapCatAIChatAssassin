@@ -91,6 +91,8 @@ class Event:
         gGroupLock.setdefault(group_id, FairLock())
         missed = gGroupLock[group_id].locked()
         gGroupLock[group_id].acquire()
+        if gGroupLock[group_id].islast():
+            missed = False
         unity_group_message(plugin_event, Proc, missed)
         gGroupLock[group_id].release()
 
@@ -120,11 +122,13 @@ class FairLock:
         self._next_ticket = 0
         self._serving = 0
         self._held = False  # 是否被持有
+        self._count = 0
 
     def acquire(self):
         with self._lock:
             my_ticket = self._next_ticket
             self._next_ticket += 1
+            self._count += 1
             while my_ticket != self._serving:
                 self._cond.wait()
             self._held = True
@@ -135,11 +139,15 @@ class FairLock:
                 raise RuntimeError("release unlocked lock")
             self._held = False
             self._serving += 1
+            self._count -= 1
             self._cond.notify_all()
 
     def locked(self):
         with self._lock:
             return self._held
+
+    def islast(self):
+        return 1 == self._count
 
 
 def load_config():
