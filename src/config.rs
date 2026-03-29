@@ -169,12 +169,16 @@ pub struct ToolsConfig {
     pub temp_dir: String,
     #[serde(default = "default_tool_audit_log")]
     pub audit_log_path: String,
-    #[serde(default = "default_tool_editable_roots")]
-    pub editable_roots: Vec<String>,
-    #[serde(default = "default_tool_send_file_roots")]
-    pub send_file_roots: Vec<String>,
-    #[serde(default = "default_tool_shell_programs")]
-    pub shell_allowed_programs: Vec<String>,
+    #[serde(default = "default_tool_protected_path_keywords")]
+    pub protected_path_keywords: Vec<String>,
+    #[serde(default = "default_tool_protected_file_names")]
+    pub protected_file_names: Vec<String>,
+    #[serde(default = "default_tool_protected_extensions")]
+    pub protected_extensions: Vec<String>,
+    #[serde(default = "default_tool_shell_blocked_programs")]
+    pub shell_blocked_programs: Vec<String>,
+    #[serde(default = "default_tool_shell_blocked_tokens")]
+    pub shell_blocked_tokens: Vec<String>,
 }
 
 impl Default for ToolsConfig {
@@ -186,9 +190,11 @@ impl Default for ToolsConfig {
             fetch_max_chars: default_tool_fetch_max_chars(),
             temp_dir: default_tool_temp_dir(),
             audit_log_path: default_tool_audit_log(),
-            editable_roots: default_tool_editable_roots(),
-            send_file_roots: default_tool_send_file_roots(),
-            shell_allowed_programs: default_tool_shell_programs(),
+            protected_path_keywords: default_tool_protected_path_keywords(),
+            protected_file_names: default_tool_protected_file_names(),
+            protected_extensions: default_tool_protected_extensions(),
+            shell_blocked_programs: default_tool_shell_blocked_programs(),
+            shell_blocked_tokens: default_tool_shell_blocked_tokens(),
         }
     }
 }
@@ -327,32 +333,113 @@ fn default_tool_audit_log() -> String {
     "./data/tool-audit.log".to_string()
 }
 
-fn default_tool_editable_roots() -> Vec<String> {
+fn default_tool_protected_path_keywords() -> Vec<String> {
     vec![
-        "/Wind_Data/codex".to_string(),
-        "./data/tool-workspace".to_string(),
+        "/etc/".to_string(),
+        "/proc/".to_string(),
+        "/sys/".to_string(),
+        "/dev/".to_string(),
+        "/boot/".to_string(),
+        "/root/.ssh".to_string(),
+        "/root/.cc-switch".to_string(),
+        "/root/.config/qq".to_string(),
+        "/var/lib/".to_string(),
+        "/run/systemd/".to_string(),
     ]
 }
 
-fn default_tool_send_file_roots() -> Vec<String> {
+fn default_tool_protected_file_names() -> Vec<String> {
     vec![
-        "/Wind_Data/codex".to_string(),
-        "./data/tool-temp".to_string(),
-        "./data/tool-workspace".to_string(),
+        "config.json".to_string(),
+        "memory.json".to_string(),
+        "cainbot-exclusive-groups.json".to_string(),
+        ".env".to_string(),
+        "authorized_keys".to_string(),
+        "known_hosts".to_string(),
+        "id_rsa".to_string(),
+        "id_ed25519".to_string(),
+        "cc-switch.db".to_string(),
     ]
 }
 
-fn default_tool_shell_programs() -> Vec<String> {
+fn default_tool_protected_extensions() -> Vec<String> {
     vec![
+        "db".to_string(),
+        "sqlite".to_string(),
+        "sqlite3".to_string(),
+        "pem".to_string(),
+        "key".to_string(),
+        "crt".to_string(),
+        "cer".to_string(),
+        "p12".to_string(),
+        "pfx".to_string(),
+        "service".to_string(),
+        "socket".to_string(),
+        "timer".to_string(),
+        "mount".to_string(),
+    ]
+}
+
+fn default_tool_shell_blocked_programs() -> Vec<String> {
+    vec![
+        "rm".to_string(),
+        "rmdir".to_string(),
+        "sudo".to_string(),
+        "su".to_string(),
+        "doas".to_string(),
+        "systemctl".to_string(),
+        "service".to_string(),
+        "loginctl".to_string(),
+        "shutdown".to_string(),
+        "reboot".to_string(),
+        "poweroff".to_string(),
+        "halt".to_string(),
+        "pkill".to_string(),
+        "kill".to_string(),
+        "killall".to_string(),
+        "mount".to_string(),
+        "umount".to_string(),
+        "dd".to_string(),
+        "mkfs".to_string(),
+        "fdisk".to_string(),
+        "parted".to_string(),
+        "bash".to_string(),
+        "sh".to_string(),
+        "zsh".to_string(),
+        "fish".to_string(),
+        "python".to_string(),
         "python3".to_string(),
-        "ls".to_string(),
-        "cat".to_string(),
-        "sed".to_string(),
-        "grep".to_string(),
-        "find".to_string(),
-        "head".to_string(),
-        "tail".to_string(),
-        "wc".to_string(),
+        "node".to_string(),
+        "nodejs".to_string(),
+        "perl".to_string(),
+        "ruby".to_string(),
+    ]
+}
+
+fn default_tool_shell_blocked_tokens() -> Vec<String> {
+    vec![
+        "sudo".to_string(),
+        "rm ".to_string(),
+        "rm-".to_string(),
+        "rmdir".to_string(),
+        "reboot".to_string(),
+        "shutdown".to_string(),
+        "poweroff".to_string(),
+        "halt".to_string(),
+        "systemctl".to_string(),
+        "service ".to_string(),
+        "loginctl".to_string(),
+        "pkill".to_string(),
+        "kill ".to_string(),
+        "killall".to_string(),
+        "mount ".to_string(),
+        "umount".to_string(),
+        "mkfs".to_string(),
+        "fdisk".to_string(),
+        "parted".to_string(),
+        "/etc/".to_string(),
+        "/root/.ssh".to_string(),
+        "/root/.cc-switch".to_string(),
     ]
 }
 

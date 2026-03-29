@@ -188,6 +188,12 @@ impl ToolExecutor {
         request: &ToolRequest,
     ) -> anyhow::Result<String> {
         let target = self.validate_send_file_path(tools, &request.file_path)?;
+        if !target.exists() {
+            bail!("待发送文件不存在：{}", target.display());
+        }
+        if !target.is_file() {
+            bail!("只允许发送普通文件：{}", target.display());
+        }
         let file_name = if request.file_name.trim().is_empty() {
             target.file_name().and_then(|item| item.to_str()).unwrap_or("tool-output.bin").to_string()
         } else {
@@ -227,16 +233,7 @@ impl ToolExecutor {
         if program.is_empty() {
             bail!("shell_command 缺少 program");
         }
-        let normalized_programs = tools
-            .shell_allowed_programs
-            .iter()
-            .map(|item| item.trim())
-            .filter(|item| !item.is_empty())
-            .collect::<Vec<_>>();
-        if !normalized_programs.iter().any(|item| *item == program) {
-            bail!("程序不在白名单内：{program}");
-        }
-        ensure_shell_args_safe(program, &request.args)?;
+        ensure_shell_args_safe(program, &request.args, tools, &self.root_dir)?;
         let output = timeout(
             Duration::from_millis(tools.execution_timeout_ms.max(1000)),
             Command::new(program).args(&request.args).output(),
@@ -296,44 +293,13 @@ impl ToolExecutor {
 
     fn validate_editable_path(&self, tools: &ToolsConfig, target: &str) -> anyhow::Result<PathBuf> {
         let path = self.resolve_path(target);
-        let forbidden = [
-            self.config_path.clone(),
-            self.root_dir.join("data").join("config.json"),
-            self.root_dir.join("data").join("memory.json"),
-            self.root_dir.join("data").join("cainbot-exclusive-groups.json"),
-        ];
-        if forbidden.iter().any(|item| normalize_path(item) == normalize_path(&path)) {
-            bail!("禁止修改配置或状态文件：{}", path.display());
-        }
-        if path
-            .file_name()
-            .and_then(|item| item.to_str())
-            .map(|item| item.eq_ignore_ascii_case("config.json"))
-            .unwrap_or(false)
-        {
-            bail!("禁止修改任意 config.json");
-        }
-        let allowed = tools
-            .editable_roots
-            .iter()
-            .map(|item| self.resolve_path(item))
-            .collect::<Vec<_>>();
-        if !allowed.iter().any(|root| self.is_under_path(&path, root)) {
-            bail!("目标文件不在可编辑白名单内：{}", path.display());
-        }
+        ensure_path_not_protected(tools, &path, &self.config_path)?;
         Ok(path)
     }
 
     fn validate_send_file_path(&self, tools: &ToolsConfig, target: &str) -> anyhow::Result<PathBuf> {
         let path = self.resolve_path(target);
-        let allowed = tools
-            .send_file_roots
-            .iter()
-            .map(|item| self.resolve_path(item))
-            .collect::<Vec<_>>();
-        if !allowed.iter().any(|root| self.is_under_path(&path, root)) {
-            bail!("文件不在可发送白名单内：{}", path.display());
-        }
+        ensure_path_not_protected(tools, &path, &self.config_path)?;
         Ok(path)
     }
 }
@@ -357,7 +323,7 @@ pub fn build_tool_system_prompt(config: &Config) -> String {
         concat!(
             "你拥有一组受限工具，但必须同时满足两个条件才可调用：\n",
             "1. 你自己判断该动作必要且安全\n",
-            "2. 程序的硬限制白名单也允许\n\n",
+            "2. 程序的硬限制黑名单未命中\n\n",
             "如果要调用工具，你必须只输出一段工具 JSON，格式如下：\n",
             "{start}{{\"tool\":\"run_python|edit_text_file|send_local_file|fetch_web_page|shell_command\",\"self_assessed_safe\":true,\"reason\":\"为什么安全且必要\",...}}{end}\n\n",
             "规则：\n",
@@ -365,10 +331,11 @@ pub fn build_tool_system_prompt(config: &Config) -> String {
             "- 如果不需要工具，就直接正常回复文本，或输出【SKIP】。\n",
             "- 禁止请求修改任何配置文件、服务文件、数据库、密钥文件。\n",
             "- run_python 只能写纯计算/文本处理脚本，禁止 import os、subprocess、socket、shutil、pathlib、ctypes，也禁止 open()。\n",
-            "- edit_text_file 只能改普通文本文件，且必须在白名单目录内。\n",
-            "- send_local_file 只能发送白名单目录中的现有文件。\n",
+            "- edit_text_file 默认可改普通文本文件，但一旦命中配置、状态、数据库、密钥或系统敏感路径，会被程序拒绝。\n",
+            "- send_local_file 默认可发送现有文件，但一旦命中配置、状态、数据库、密钥或系统敏感路径，会被程序拒绝。\n",
             "- fetch_web_page 只能抓取 http/https 文本页面。\n",
-            "- shell_command 只能调用受限白名单程序，不能带危险参数。\n",
+            "- shell_command 默认允许普通系统命令；但危险程序、危险参数、解释器绕过、敏感路径访问会被程序拒绝。\n",
+            "- 当用户询问实时状态，如内存、磁盘、进程、端口、目录内容时，应优先考虑 shell_command，而不是说自己拿不到状态。\n",
             "- 一次只允许请求一个工具。\n",
             "- 工具执行结果会回到上下文，你再继续判断是否还需要下一步。\n",
             "- 最多工具轮数：{max_rounds}。"
@@ -421,30 +388,115 @@ fn ensure_text_edit_safe(path: &Path, content: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn ensure_shell_args_safe(program: &str, args: &[String]) -> anyhow::Result<()> {
-    let normalized_program = program.to_lowercase();
+fn ensure_shell_args_safe(
+    program: &str,
+    args: &[String],
+    tools: &ToolsConfig,
+    root_dir: &Path,
+) -> anyhow::Result<()> {
+    let normalized_program = program
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(program)
+        .trim()
+        .to_lowercase();
+    if let Some(hit) = tools
+        .shell_blocked_programs
+        .iter()
+        .map(|item| item.trim().to_lowercase())
+        .find(|item| !item.is_empty() && *item == normalized_program)
+    {
+        bail!("命令程序命中禁用规则：{hit}");
+    }
     let joined = format!("{} {}", normalized_program, args.join(" ").to_lowercase());
-    let banned = [
-        "sudo",
-        "rm ",
-        "rm-",
-        "rmdir",
-        "mv ",
-        "chmod",
-        "chown",
-        "systemctl",
-        "service ",
-        "pkill",
-        "kill ",
-        "reboot",
-        "shutdown",
-        "mount ",
-        "umount",
-    ];
-    if let Some(hit) = banned.iter().find(|item| joined.contains(**item)) {
+    if let Some(hit) = tools
+        .shell_blocked_tokens
+        .iter()
+        .map(|item| item.trim().to_lowercase())
+        .find(|item| !item.is_empty() && joined.contains(item))
+    {
         bail!("命令命中禁用规则：{hit}");
     }
+    for arg in args {
+        if let Some(path) = maybe_resolve_arg_path(root_dir, arg) {
+            ensure_path_not_protected(tools, &path, root_dir)?;
+        }
+    }
     Ok(())
+}
+
+fn ensure_path_not_protected(tools: &ToolsConfig, path: &Path, config_path: &Path) -> anyhow::Result<()> {
+    let normalized_path = normalize_path(path);
+    let normalized_config = normalize_path(config_path);
+    if normalized_path == normalized_config {
+        bail!("禁止访问主配置文件：{}", path.display());
+    }
+    let rendered_path = normalized_path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_lowercase();
+    if let Some(hit) = tools
+        .protected_path_keywords
+        .iter()
+        .map(|item| item.trim().replace('\\', "/").to_lowercase())
+        .find(|item| !item.is_empty() && rendered_path.contains(item))
+    {
+        bail!("目标路径命中敏感路径规则：{hit}");
+    }
+    if let Some(file_name) = normalized_path.file_name().and_then(|item| item.to_str()) {
+        let file_name = file_name.to_lowercase();
+        if let Some(hit) = tools
+            .protected_file_names
+            .iter()
+            .map(|item| item.trim().to_lowercase())
+            .find(|item| !item.is_empty() && *item == file_name)
+        {
+            bail!("目标文件命中敏感文件规则：{hit}");
+        }
+    }
+    if let Some(ext) = normalized_path.extension().and_then(|item| item.to_str()) {
+        let ext = ext.to_lowercase();
+        if let Some(hit) = tools
+            .protected_extensions
+            .iter()
+            .map(|item| item.trim().trim_start_matches('.').to_lowercase())
+            .find(|item| !item.is_empty() && *item == ext)
+        {
+            bail!("目标文件扩展名命中敏感规则：.{hit}");
+        }
+    }
+    Ok(())
+}
+
+fn maybe_resolve_arg_path(root_dir: &Path, arg: &str) -> Option<PathBuf> {
+    let trimmed = arg.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with('-') {
+        return None;
+    }
+    if trimmed.contains('=') && !trimmed.starts_with('/') && !trimmed.starts_with("./") && !trimmed.starts_with("../") {
+        return None;
+    }
+    let candidate = if let Some((_, value)) = trimmed.split_once('=') {
+        value
+    } else {
+        trimmed
+    };
+    if candidate.is_empty() {
+        return None;
+    }
+    let looks_like_path = candidate.starts_with('/')
+        || candidate.starts_with("./")
+        || candidate.starts_with("../")
+        || candidate.contains('/')
+        || candidate.contains('\\');
+    if !looks_like_path {
+        return None;
+    }
+    let path = PathBuf::from(candidate);
+    Some(if path.is_absolute() { path } else { root_dir.join(path) })
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
