@@ -21,6 +21,7 @@ use tokio::sync::Mutex;
 use tools::{ToolExecutor, ToolRuntimeContext, build_tool_system_prompt, extract_tool_request};
 
 const SKIP_TEXT: &str = "【SKIP】";
+const MEMORY_SKIP_TEXT: &str = "【NO_MEMORY_UPDATE】";
 const MIN_CAINBOT_EXCLUSIVE_GROUPS_HEARTBEAT_SECONDS: u64 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -299,7 +300,9 @@ async fn handle_group_message(state: Arc<AppState>, event: Value, missed: bool) 
     )
     .await;
 
-    if config.bot.record_memory {
+    if config.bot.record_memory
+        && should_attempt_group_memory_update(&state, &group_id, &message_text, final_text.trim()).await
+    {
         let state = Arc::clone(&state);
         let group_id = group_id.clone();
         let model = config.ai.memory_model.clone();
@@ -508,15 +511,29 @@ async fn build_selected_knowledge(state: &Arc<AppState>, memory: &MemoryFile, gr
 }
 
 async fn update_group_memory(state: Arc<AppState>, group_id: &str, model_override: &str) -> anyhow::Result<()> {
-    let timeline = build_timeline(&state, group_id, 20).await;
+    let existing_memory = {
+        let memory = state.memory.lock().await;
+        memory.global.group_memory.get(group_id).cloned().unwrap_or_default()
+    };
+    let timeline = build_timeline(&state, group_id, 12).await;
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
-            content: "你负责把一个群最近聊天压缩成 120 字以内的长期记忆。不要流水账，只保留对后续聊天有价值的信息。只输出记忆文本。".to_string(),
+            content: concat!(
+                "你负责维护一个群的长期记忆。",
+                "只记录对后续聊天仍然有价值的稳定信息，例如长期偏好、持续中的计划、明确约定、反复提到的固定背景、稳定关系。",
+                "不要记录一次性闲聊、短期情绪、临时排查步骤、已经结束的话题、口头禅、无意义玩笑。",
+                "如果最近对话没有新增的长期价值，必须只输出【NO_MEMORY_UPDATE】。",
+                "如果需要更新，则输出新的完整长期记忆，120字以内，不要分点，不要流水账。"
+            ).to_string(),
         },
         ChatMessage {
             role: "user".to_string(),
-            content: timeline,
+            content: format!(
+                "当前长期记忆：\n{}\n\n最近对话：\n{}",
+                if existing_memory.is_empty() { "暂无" } else { &existing_memory },
+                timeline
+            ),
         },
     ];
     let text = {
@@ -531,10 +548,41 @@ async fn update_group_memory(state: Arc<AppState>, group_id: &str, model_overrid
             )
             .await?
     };
+    let text = text.trim().to_string();
+    if text.is_empty() || text == MEMORY_SKIP_TEXT || text == existing_memory {
+        return Ok(());
+    }
+    if !looks_like_persistent_memory(&text) {
+        return Ok(());
+    }
     let mut memory = state.memory.lock().await;
     memory.global.group_memory.insert(group_id.to_string(), text);
     util::write_json_pretty(&state.memory_path, &*memory)?;
     Ok(())
+}
+
+async fn should_attempt_group_memory_update(
+    state: &Arc<AppState>,
+    group_id: &str,
+    latest_user_text: &str,
+    latest_reply_text: &str,
+) -> bool {
+    if !looks_like_persistent_memory(latest_user_text) && !looks_like_persistent_memory(latest_reply_text) {
+        return false;
+    }
+    let recent_entries = get_history_entries(state, group_id, 8).await;
+    if recent_entries.len() < 4 {
+        return false;
+    }
+    let meaningful_count = recent_entries
+        .iter()
+        .filter(|entry| looks_like_persistent_memory(&entry.text))
+        .count();
+    let total_chars = recent_entries
+        .iter()
+        .map(|entry| entry.text.chars().count())
+        .sum::<usize>();
+    meaningful_count >= 3 && total_chars >= 80
 }
 
 async fn build_timeline(state: &Arc<AppState>, group_id: &str, limit: usize) -> String {
@@ -795,4 +843,24 @@ fn non_empty<'a>(value: Option<&'a str>) -> Option<&'a str> {
             Some(trimmed)
         }
     })
+}
+
+fn looks_like_persistent_memory(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed == SKIP_TEXT || trimmed == MEMORY_SKIP_TEXT {
+        return false;
+    }
+    let normalized = trimmed
+        .replace("[OP:image]", "")
+        .replace('\n', " ")
+        .replace('\r', " ");
+    let non_space_chars = normalized.chars().filter(|ch| !ch.is_whitespace()).count();
+    if non_space_chars < 12 {
+        return false;
+    }
+    let meaningful_chars = normalized
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(ch))
+        .count();
+    meaningful_chars >= 8
 }

@@ -282,7 +282,7 @@ fn default_max_tokens() -> u32 {
 }
 
 fn default_temperature() -> f32 {
-    0.7
+    1.0
 }
 
 fn default_retry_attempts() -> u32 {
