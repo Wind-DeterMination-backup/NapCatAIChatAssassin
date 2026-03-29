@@ -119,6 +119,55 @@ impl OpenAiCompatClient {
         Err(last_error)
     }
 
+    pub async fn complete_with_image_url(
+        &mut self,
+        prompt: &str,
+        image_url: &str,
+        model: Option<&str>,
+        temperature: Option<f32>,
+        max_tokens: Option<u32>,
+    ) -> anyhow::Result<String> {
+        self.validate()?;
+        let model = model
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .unwrap_or(&self.config.model)
+            .to_string();
+        let temperature = temperature.unwrap_or(self.config.temperature);
+        let max_tokens = max_tokens.unwrap_or(self.config.max_tokens);
+        let transports = if self.is_cc_switch_proxy() {
+            vec!["responses", "chat"]
+        } else {
+            vec!["chat", "responses"]
+        };
+        let mut last_error: Option<anyhow::Error> = None;
+        for (index, transport) in transports.iter().enumerate() {
+            let result = match *transport {
+                "chat" => {
+                    self.complete_image_via_chat(prompt, image_url, &model, temperature, max_tokens)
+                        .await
+                }
+                _ => {
+                    self.complete_image_via_responses(prompt, image_url, &model, temperature, max_tokens)
+                        .await
+                }
+            };
+            match result {
+                Ok(text) => return Ok(text),
+                Err(error) => {
+                    last_error = Some(error);
+                    if index < transports.len() - 1
+                        && should_fallback_transport(last_error.as_ref().expect("error present"))
+                    {
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("image completion failed")))
+    }
+
     fn validate(&self) -> anyhow::Result<()> {
         if self.config.api_base.trim().is_empty() {
             bail!("chat.baseUrl 未配置");
@@ -267,6 +316,83 @@ impl OpenAiCompatClient {
             }
         }
         Err(last_error.unwrap_or_else(|| anyhow::anyhow!("responses transport failed")))
+    }
+
+    async fn complete_image_via_chat(
+        &self,
+        prompt: &str,
+        image_url: &str,
+        model: &str,
+        temperature: f32,
+        max_tokens: u32,
+    ) -> anyhow::Result<String> {
+        let headers = self.build_headers();
+        let candidates = self.build_model_candidates(model);
+        let mut last_error = None;
+        for candidate in candidates {
+            let body = json!({
+                "model": candidate,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        { "type": "text", "text": prompt },
+                        { "type": "image_url", "image_url": { "url": image_url } }
+                    ]
+                }],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": false
+            });
+            match self.request_json("chat/completions", body, &headers).await {
+                Ok(payload) => {
+                    let text = extract_chat_text(&payload);
+                    if !text.is_empty() {
+                        return Ok(text);
+                    }
+                    last_error = Some(anyhow::anyhow!("聊天接口未返回可用文本"));
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("chat image transport failed")))
+    }
+
+    async fn complete_image_via_responses(
+        &self,
+        prompt: &str,
+        image_url: &str,
+        model: &str,
+        temperature: f32,
+        max_tokens: u32,
+    ) -> anyhow::Result<String> {
+        let headers = self.build_headers();
+        let candidates = self.build_model_candidates(model);
+        let mut last_error = None;
+        for candidate in candidates {
+            let body = json!({
+                "model": candidate,
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+                "input": [{
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": prompt },
+                        { "type": "input_image", "image_url": image_url }
+                    ]
+                }]
+            });
+            match self.request_json("responses", body, &headers).await {
+                Ok(payload) => {
+                    let text = extract_responses_text(&payload);
+                    if !text.is_empty() {
+                        return Ok(text);
+                    }
+                    last_error = Some(anyhow::anyhow!("聊天接口未返回可用文本"));
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("responses image transport failed")))
     }
 
     async fn request_json(

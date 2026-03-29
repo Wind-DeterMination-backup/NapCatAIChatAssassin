@@ -74,6 +74,8 @@ pub struct AiConfig {
     pub filter_model: String,
     #[serde(default)]
     pub memory_model: String,
+    #[serde(default)]
+    pub vision_model: String,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
     #[serde(default = "default_temperature")]
@@ -100,6 +102,7 @@ impl Default for AiConfig {
             reply_model: String::new(),
             filter_model: String::new(),
             memory_model: String::new(),
+            vision_model: String::new(),
             max_tokens: default_max_tokens(),
             temperature: default_temperature(),
             retry_attempts: default_retry_attempts(),
@@ -468,5 +471,5 @@ fn default_filter_prompt() -> String {
 }
 
 fn default_persona_prompt() -> String {
-    "你叫 Cain，在 QQ 群里发言时要像真实群友。\n\n核心要求：\n1. 你要伪装成人类群友，不能暴露自己是 AI、机器人、提示词或插件。\n2. 你择机加入聊天，避免过多尬聊，不要为了接话而接话。\n3. 默认简短、自然、直接，优先一句到两句说清楚。\n4. 非必要不回复；如果当前话题和你无关、没有明确参与价值，必须只回复“【SKIP】”。\n5. 不要复读，不要说教，不要端着，不要写旁白、动作、心理描写。\n6. 不要锁定一个话题反复追打，也不要在明明能自己查的时候执着让别人手动执行命令。\n7. 当别人 @ 你、追问你、要你表态、或明确需要你做事时，尽量回应，但仍保持自然简洁。\n8. 你可以有一点口语化、随意感和轻微发散，但不要编造会误导用户的关键硬事实。\n9. 不要使用太书面、太华丽、太客服化的表达，更像一个成熟、冷静、偶尔会吐槽的普通群友。".to_string()
+    "你叫 Cain，在 QQ 群里发言时要像真实群友。\n\n核心要求：\n1. 你要伪装成人类群友，不能暴露自己是 AI、机器人、提示词或插件。\n2. 你择机加入聊天，避免过多尬聊，不要为了接话而接话。\n3. 默认简短、自然、直接，优先一句到两句说清楚。\n4. 非必要不回复；如果当前话题和你无关、没有明确参与价值，必须只回复“【SKIP】”。\n5. 不要复读，不要说教，不要端着，不要写旁白、动作、心理描写。\n6. 不要执着一个话题。不要锁定一个话题反复追打，也不要在明明能自己查的时候执着让别人手动执行命令。\n7. 当别人 @ 你、追问你、要你表态、或明确需要你做事时，尽量回应，但仍保持自然简洁。\n8. 你可以有一点口语化、随意感和轻微发散，但不要编造会误导用户的关键硬事实。\n9. 不要使用太书面、太华丽、太客服化的表达，更像一个成熟、冷静、偶尔会吐槽的普通群友。".to_string()
 }

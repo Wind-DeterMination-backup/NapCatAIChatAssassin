@@ -11,6 +11,7 @@ use tokio::time::{Duration, timeout};
 
 use crate::config::{Config, ToolsConfig};
 use crate::napcat::NapcatClient;
+use crate::openai::OpenAiCompatClient;
 use crate::util;
 
 const TOOL_REQUEST_START: &str = "【TOOL_REQUEST】";
@@ -19,6 +20,7 @@ const TOOL_REQUEST_END: &str = "【END_TOOL_REQUEST】";
 #[derive(Debug, Clone)]
 pub struct ToolRuntimeContext {
     pub group_id: String,
+    pub current_image_urls: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +59,10 @@ pub struct ToolRequest {
     #[serde(default)]
     pub url: String,
     #[serde(default)]
+    pub image_url: String,
+    #[serde(default)]
+    pub question: String,
+    #[serde(default)]
     pub program: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -93,6 +99,7 @@ impl ToolExecutor {
             "edit_text_file" => self.edit_text_file(&config.tools, &request).await,
             "send_local_file" => self.send_local_file(&config.tools, runtime, &request).await,
             "fetch_web_page" => self.fetch_web_page(&config.tools, &request).await,
+            "read_image" => self.read_image(config, runtime, &request).await,
             "shell_command" => self.shell_command(&config.tools, &request).await,
             _ => bail!("不支持的工具：{tool_name}"),
         };
@@ -259,6 +266,44 @@ impl ToolExecutor {
         ))
     }
 
+    async fn read_image(
+        &self,
+        config: &Config,
+        runtime: &ToolRuntimeContext,
+        request: &ToolRequest,
+    ) -> anyhow::Result<String> {
+        let image_url = if !request.image_url.trim().is_empty() {
+            request.image_url.trim().to_string()
+        } else if runtime.current_image_urls.len() == 1 {
+            runtime.current_image_urls[0].clone()
+        } else {
+            bail!("read_image 缺少 image_url，且当前消息没有唯一可用图片");
+        };
+        if !image_url.starts_with("http://") && !image_url.starts_with("https://") {
+            bail!("read_image 只允许读取 http/https 图片");
+        }
+        let question = if request.question.trim().is_empty() {
+            "请描述这张图片里最重要的信息，优先识别文字、界面、截图中的报错、人物动作和上下文。回答简洁自然。".to_string()
+        } else {
+            request.question.trim().to_string()
+        };
+        let mut client = OpenAiCompatClient::new(config.ai.clone())?;
+        let text = client
+            .complete_with_image_url(
+                &question,
+                &image_url,
+                if config.ai.vision_model.trim().is_empty() {
+                    None
+                } else {
+                    Some(config.ai.vision_model.trim())
+                },
+                Some(config.ai.temperature),
+                Some(config.ai.max_tokens),
+            )
+            .await?;
+        Ok(format!("读图完成：{}\n{}", image_url, trim_text(&text, config.tools.fetch_max_chars)))
+    }
+
     async fn append_audit_log(&self, tools: &ToolsConfig, payload: Value) {
         let audit_path = self.resolve_path(&tools.audit_log_path);
         if let Some(parent) = audit_path.parent() {
@@ -325,7 +370,7 @@ pub fn build_tool_system_prompt(config: &Config) -> String {
             "1. 你自己判断该动作必要且安全\n",
             "2. 程序的硬限制黑名单未命中\n\n",
             "如果要调用工具，你必须只输出一段工具 JSON，格式如下：\n",
-            "{start}{{\"tool\":\"run_python|edit_text_file|send_local_file|fetch_web_page|shell_command\",\"self_assessed_safe\":true,\"reason\":\"为什么安全且必要\",...}}{end}\n\n",
+            "{start}{{\"tool\":\"run_python|edit_text_file|send_local_file|fetch_web_page|read_image|shell_command\",\"self_assessed_safe\":true,\"reason\":\"为什么安全且必要\",...}}{end}\n\n",
             "规则：\n",
             "- 只有在纯文本回答做不到时才调用工具。\n",
             "- 如果不需要工具，就直接正常回复文本，或输出【SKIP】。\n",
@@ -334,6 +379,7 @@ pub fn build_tool_system_prompt(config: &Config) -> String {
             "- edit_text_file 默认可改普通文本文件，但一旦命中配置、状态、数据库、密钥或系统敏感路径，会被程序拒绝。\n",
             "- send_local_file 默认可发送现有文件，但一旦命中配置、状态、数据库、密钥或系统敏感路径，会被程序拒绝。\n",
             "- fetch_web_page 只能抓取 http/https 文本页面。\n",
+            "- read_image 用于读取当前消息或指定 URL 的图片内容；如果用户发的是截图、报错图、界面图、照片，且理解图片对回答有帮助，应优先调用它。\n",
             "- shell_command 默认允许普通系统命令；但危险程序、危险参数、解释器绕过、敏感路径访问会被程序拒绝。\n",
             "- 当用户询问实时状态，如内存、磁盘、进程、端口、目录内容时，应优先考虑 shell_command，而不是说自己拿不到状态。\n",
             "- 一次只允许请求一个工具。\n",

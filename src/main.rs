@@ -206,7 +206,7 @@ async fn handle_group_message(state: Arc<AppState>, event: Value, missed: bool) 
     }
 
     let message_text = render_message(event.get("message"), event.get("raw_message").and_then(Value::as_str));
-    let message_text = message_text.replace("[OP:image]", "");
+    let message_image_urls = extract_message_image_urls(event.get("message"));
     if should_ignore(&config, &message_text) {
         return Ok(());
     }
@@ -250,12 +250,21 @@ async fn handle_group_message(state: Arc<AppState>, event: Value, missed: bool) 
         return Ok(());
     }
 
-    let reply_messages = build_reply_messages(&state, &config, &group_id, &self_id, &message_text).await?;
+    let reply_messages = build_reply_messages(
+        &state,
+        &config,
+        &group_id,
+        &self_id,
+        &message_text,
+        &message_image_urls,
+    )
+    .await?;
     let reply_text = generate_reply_with_tools(
         &state,
         &config,
         ToolRuntimeContext {
             group_id: group_id.clone(),
+            current_image_urls: message_image_urls.clone(),
         },
         reply_messages,
         non_empty(Some(&config.ai.reply_model)),
@@ -367,6 +376,7 @@ async fn build_reply_messages(
     group_id: &str,
     self_id: &str,
     current_text: &str,
+    current_image_urls: &[String],
 ) -> anyhow::Result<Vec<ChatMessage>> {
     let memory = state.memory.lock().await.clone();
     let long_memory = memory.global.group_memory.get(group_id).cloned().unwrap_or_default();
@@ -385,6 +395,12 @@ async fn build_reply_messages(
     }
     if !selected_knowledge.is_null() && selected_knowledge != json!({}) {
         prompt_parts.push(format!("命中的知识与关系：{}", serde_json::to_string(&selected_knowledge)?));
+    }
+    if !current_image_urls.is_empty() {
+        prompt_parts.push(format!(
+            "本次最新消息附带了 {} 张图片。如需理解图片内容、截图、报错界面或图片中的文字，可调用 read_image 读取当前图片。",
+            current_image_urls.len()
+        ));
     }
     Ok(vec![
         ChatMessage {
@@ -843,6 +859,33 @@ fn non_empty<'a>(value: Option<&'a str>) -> Option<&'a str> {
             Some(trimmed)
         }
     })
+}
+
+fn extract_message_image_urls(message: Option<&Value>) -> Vec<String> {
+    let mut urls = Vec::new();
+    let Some(items) = message.and_then(Value::as_array) else {
+        return urls;
+    };
+    for segment in items {
+        let seg_type = segment.get("type").and_then(Value::as_str).unwrap_or_default();
+        if seg_type != "image" {
+            continue;
+        }
+        let data = segment.get("data").and_then(Value::as_object);
+        let Some(data) = data else {
+            continue;
+        };
+        for key in ["url", "file", "src"] {
+            if let Some(value) = data.get(key).and_then(Value::as_str) {
+                let trimmed = value.trim();
+                if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                    urls.push(trimmed.to_string());
+                    break;
+                }
+            }
+        }
+    }
+    urls
 }
 
 fn looks_like_persistent_memory(text: &str) -> bool {
