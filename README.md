@@ -71,6 +71,20 @@ python -m OlivOSAIChatAssassin
 }
 ```
 
+### CainBot 联动配置
+```json
+{
+  "integration": {
+    "write_cainbot_exclusive_groups": true,
+    "cainbot_exclusive_groups_file": "./data/cainbot-exclusive-groups.json"
+  }
+}
+```
+
+- 启用后会输出一个给 CainBot 读取的互斥群文件
+- CainBot 如果配置读取该文件，则这些群会被视为“外部 bot 已占用”，Cain 在对应群不启用
+- 如果 CainBot 没配置、文件不存在、或根本没有部署这个插件，CainBot 侧会静默兜底，不会因此报错
+
 ## 工作原理
 
 1. **触发机制**:

@@ -104,6 +104,10 @@ DEFAULT_CONFIG = {
         'persona_prompt': DEFAULT_PERSONA_PROMPT,
         'filter_prompt': DEFAULT_FILTER_PROMPT,
     },
+    'integration': {
+        'write_cainbot_exclusive_groups': True,
+        'cainbot_exclusive_groups_file': '',
+    },
 }
 
 
@@ -284,6 +288,7 @@ class AssassinBot:
         self.running = False
         self.napcat = None
         self.openai = None
+        self.last_cainbot_exclusive_groups_payload = None
 
     def info(self, message):
         print(f'[INFO] {message}', flush=True)
@@ -301,6 +306,7 @@ class AssassinBot:
             with open(self.config_path, 'w', encoding='utf-8') as file:
                 json.dump(loaded, file, ensure_ascii=False, indent=4)
         self.config = merge_defaults(loaded, DEFAULT_CONFIG)
+        self.sync_cainbot_exclusive_groups_file()
         return self.config
 
     def load_static_knowledge(self):
@@ -356,6 +362,61 @@ class AssassinBot:
             history_size = int(self.config['bot'].get('history_size', 24))
             for group_id, history in list(self.message_history.items()):
                 self.message_history[group_id] = deque(list(history), maxlen=history_size)
+
+    def get_cainbot_exclusive_groups_file_path(self):
+        integration = self.config.get('integration', {}) if isinstance(self.config, dict) else {}
+        configured = str(integration.get('cainbot_exclusive_groups_file', '')).strip()
+        if configured:
+            if os.path.isabs(configured):
+                return configured
+            return os.path.abspath(os.path.join(self.root_dir, configured))
+        return os.path.join(self.data_dir, 'cainbot-exclusive-groups.json')
+
+    def build_cainbot_exclusive_groups_payload(self):
+        enabled_groups = [
+            str(item).strip()
+            for item in self.config.get('bot', {}).get('enabled_groups', [])
+            if str(item).strip()
+        ]
+        mode = 'all' if 'all' in enabled_groups else 'list'
+        group_ids = [] if mode == 'all' else sorted({item for item in enabled_groups if item != 'all'})
+        return {
+            'version': 1,
+            'source': 'NapCatAIChatAssassin',
+            'updatedAt': datetime.now().astimezone().replace(microsecond=0).isoformat(),
+            'mode': mode,
+            'groupIds': group_ids
+        }
+
+    def build_cainbot_exclusive_groups_signature(self, payload):
+        return {
+            'version': payload.get('version', 1),
+            'source': payload.get('source', 'NapCatAIChatAssassin'),
+            'mode': payload.get('mode', 'list'),
+            'groupIds': payload.get('groupIds', []),
+        }
+
+    def sync_cainbot_exclusive_groups_file(self):
+        integration = self.config.get('integration', {}) if isinstance(self.config, dict) else {}
+        if integration.get('write_cainbot_exclusive_groups', True) is False:
+            return
+        payload = self.build_cainbot_exclusive_groups_payload()
+        target_path = self.get_cainbot_exclusive_groups_file_path()
+        signature = json.dumps(
+            self.build_cainbot_exclusive_groups_signature(payload),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+        if signature == self.last_cainbot_exclusive_groups_payload and os.path.exists(target_path):
+            return
+        try:
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            with open(target_path, 'w', encoding='utf-8') as file:
+                file.write(serialized)
+            self.last_cainbot_exclusive_groups_payload = signature
+        except Exception as error:
+            self.warn(f'写入 CainBot 互斥群文件失败: {error}')
 
     def is_group_enabled(self, group_id):
         enabled_groups = [str(item).strip() for item in self.config['bot'].get('enabled_groups', [])]

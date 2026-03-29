@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 from urllib.parse import urljoin
 
@@ -98,7 +99,7 @@ class NapCatClient:
                 event = self._parse_sse_block(block)
                 block = []
                 if event is not None:
-                    on_event(event)
+                    threading.Thread(target=on_event, args=(event,), daemon=True).start()
                 continue
             block.append(line)
         if not self.stopped:
